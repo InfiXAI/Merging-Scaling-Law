@@ -342,13 +342,18 @@ if __name__ == "__main__":
             )
         
         model = AutoModelForCausalLM.from_pretrained(
-            args.model, 
+            args.model,
             torch_dtype=torch.bfloat16,
             device_map="auto"
         )
         model.eval()
-        
+
         tokenizer = AutoTokenizer.from_pretrained(args.tokenizer)
+
+        # Set padding token if not set
+        if tokenizer.pad_token is None:
+            tokenizer.pad_token = tokenizer.eos_token
+            print(f"Set pad_token to eos_token: {tokenizer.eos_token}")
 
         if args.file:
             files = [args.file]
