@@ -25,7 +25,7 @@ def send_callback(callback_url: str, task_id: str, model_id: str, benchmark_id: 
         task_id: Unique task identifier
         model_id: Model identifier
         benchmark_id: Benchmark identifier
-        status: Evaluation status ("success" or "failed")
+        status: Evaluation status ("succeed" or "failed")
         score: Overall evaluation score
         evaluator_scores: Dictionary of individual evaluator scores
         error_message: Error message if status is "failed"
