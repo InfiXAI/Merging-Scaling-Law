@@ -308,7 +308,14 @@ if __name__ == "__main__":
     
     device_count = torch.cuda.device_count()
     print(f"Found {device_count} GPUs")
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    # Device selection: prefer CUDA, fallback to CPU (avoid MPS due to compatibility issues)
+    if torch.cuda.is_available():
+        device = torch.device("cuda")
+        print("Using CUDA device")
+    else:
+        device = torch.device("cpu")
+        print("Using CPU device")
     
     # Initialize callback parameters
     callback_enabled = bool(args.callback_url)
@@ -341,11 +348,21 @@ if __name__ == "__main__":
                 mode="local"
             )
         
-        model = AutoModelForCausalLM.from_pretrained(
-            args.model,
-            torch_dtype=torch.bfloat16,
-            device_map="auto"
-        )
+        # Load model with appropriate device map
+        # Use device_map="auto" only with CUDA, otherwise load to CPU to avoid MPS issues
+        if torch.cuda.is_available():
+            model = AutoModelForCausalLM.from_pretrained(
+                args.model,
+                torch_dtype=torch.bfloat16,
+                device_map="auto"
+            )
+        else:
+            # On CPU or MPS, use float32 and explicit device placement
+            model = AutoModelForCausalLM.from_pretrained(
+                args.model,
+                torch_dtype=torch.float32
+            )
+            model = model.to(device)
         model.eval()
 
         tokenizer = AutoTokenizer.from_pretrained(args.tokenizer)

@@ -40,18 +40,48 @@ REPO_DIR="$WORK_DIR/Merging-EVAL"
 if [ -n "$CONDA_ENV_NAME" ]; then
     echo "Setting up Conda environment: $CONDA_ENV_NAME"
 
-    # 检查conda是否安装
-    if ! command -v conda &> /dev/null; then
-        echo "Error: Conda not found. Please install Conda or set CONDA_ENV_NAME to empty."
+    # 初始化conda（支持多种安装方式）
+    CONDA_BASE=""
+    CONDA_SH=""
+
+    # 方法1: 从CONDA_EXE环境变量获取（最可靠）
+    if [ -n "$CONDA_EXE" ] && [ -f "$CONDA_EXE" ]; then
+        CONDA_BASE=$(dirname $(dirname "$CONDA_EXE"))
+        CONDA_SH="${CONDA_BASE}/etc/profile.d/conda.sh"
+    fi
+
+    # 方法2: 尝试从PATH中找到conda
+    if [ -z "$CONDA_SH" ] || [ ! -f "$CONDA_SH" ]; then
+        CONDA_PATH=$(which conda 2>/dev/null || true)
+        if [ -n "$CONDA_PATH" ] && [ -f "$CONDA_PATH" ]; then
+            CONDA_BASE=$(dirname $(dirname "$CONDA_PATH"))
+            CONDA_SH="${CONDA_BASE}/etc/profile.d/conda.sh"
+        fi
+    fi
+
+    # 方法3: 检查常见安装位置
+    if [ -z "$CONDA_SH" ] || [ ! -f "$CONDA_SH" ]; then
+        for base_dir in "$HOME/miniconda3" "$HOME/anaconda3" "$HOME/miniconda" "$HOME/anaconda" "/opt/conda" "/opt/miniconda3" "/opt/anaconda3"; do
+            if [ -f "${base_dir}/etc/profile.d/conda.sh" ]; then
+                CONDA_BASE="$base_dir"
+                CONDA_SH="${base_dir}/etc/profile.d/conda.sh"
+                break
+            fi
+        done
+    fi
+
+    # 验证是否找到conda.sh
+    if [ -z "$CONDA_SH" ] || [ ! -f "$CONDA_SH" ]; then
+        echo "Error: Could not locate conda installation."
+        echo "Please ensure conda is installed and either:"
+        echo "  1. Run 'conda init bash' and restart your shell, or"
+        echo "  2. Set CONDA_ENV_NAME to empty to use system Python"
         exit 1
     fi
 
-    # 初始化conda（如果需要）
-    if [ -f "$HOME/miniconda3/etc/profile.d/conda.sh" ]; then
-        source "$HOME/miniconda3/etc/profile.d/conda.sh"
-    elif [ -f "$HOME/anaconda3/etc/profile.d/conda.sh" ]; then
-        source "$HOME/anaconda3/etc/profile.d/conda.sh"
-    fi
+    # Source conda.sh
+    echo "Found conda at: $CONDA_BASE"
+    source "$CONDA_SH"
 
     # 检查环境是否存在
     if conda env list | grep -q "^${CONDA_ENV_NAME} "; then
