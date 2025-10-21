@@ -372,6 +372,16 @@ if __name__ == "__main__":
             tokenizer.pad_token = tokenizer.eos_token
             print(f"Set pad_token to eos_token: {tokenizer.eos_token}")
 
+        # Adjust max_length based on model's max position embeddings
+        model_max_length = getattr(model.config, 'n_positions', None) or \
+                          getattr(model.config, 'max_position_embeddings', None) or \
+                          args.max_length
+
+        if args.max_length > model_max_length:
+            print(f"Warning: Requested max_length ({args.max_length}) exceeds model's max ({model_max_length})")
+            print(f"Adjusting max_length to {model_max_length}")
+            args.max_length = model_max_length
+
         if args.file:
             files = [args.file]
         else:
