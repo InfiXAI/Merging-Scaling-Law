@@ -10,6 +10,76 @@ import glob
 import pickle
 import hashlib
 import json
+import swanlab
+import requests
+import time
+
+def send_callback(callback_url: str, task_id: str, model_id: str, benchmark_id: str, 
+                  status: str, score: float, evaluator_scores: dict = None, 
+                  error_message: str = None, signature: str = None, max_retries: int = 3):
+    """
+    Send evaluation callback to specified URL
+    
+    Args:
+        callback_url: The callback API endpoint URL
+        task_id: Unique task identifier
+        model_id: Model identifier
+        benchmark_id: Benchmark identifier
+        status: Evaluation status ("success" or "failed")
+        score: Overall evaluation score
+        evaluator_scores: Dictionary of individual evaluator scores
+        error_message: Error message if status is "failed"
+        signature: Signature parameter (usually experiment_name)
+        max_retries: Maximum number of retry attempts
+    """
+    if evaluator_scores is None:
+        evaluator_scores = {}
+    
+    # Prepare the payload
+    payload = {
+        "task_id": task_id,
+        "model_id": model_id,
+        "benchmark_id": benchmark_id,
+        "status": status,
+        "score": score,
+        "evaluator_scores": evaluator_scores,
+        "error_message": error_message
+    }
+    
+    # Prepare headers
+    headers = {
+        'accept': 'application/json',
+        'Content-Type': 'application/json'
+    }
+    
+    # Add signature parameter to URL if provided
+    url = callback_url
+    if signature:
+        separator = '&' if '?' in url else '?'
+        url = f"{url}{separator}signature={signature}"
+    
+    # Attempt to send the callback with retries
+    for attempt in range(max_retries):
+        try:
+            print(f"Sending callback to {url} (attempt {attempt + 1}/{max_retries})")
+            response = requests.post(url, headers=headers, json=payload, timeout=30)
+            
+            if response.status_code == 200:
+                print("Callback sent successfully!")
+                return True
+            else:
+                print(f"Callback failed with status code: {response.status_code}")
+                print(f"Response: {response.text}")
+                
+        except requests.exceptions.RequestException as e:
+            print(f"Error sending callback (attempt {attempt + 1}): {e}")
+            
+        if attempt < max_retries - 1:
+            print(f"Retrying in 5 seconds...")
+            time.sleep(5)
+    
+    print(f"Failed to send callback after {max_retries} attempts")
+    return False
 
 
 def build_prompt(problem: str, solution: str, tokenizer=None) -> str:
@@ -220,92 +290,227 @@ if __name__ == "__main__":
     parser.add_argument("--output", type=str, default="./output")
     parser.add_argument("--cache_dir", type=str, default="./cache")
     parser.add_argument("--no_cache", action="store_true")
+    parser.add_argument("--experiment_name", type=str, default="eval_experiment", 
+                       help="Name of the experiment for logging")
+    parser.add_argument("--use_swanlab", action="store_true", 
+                       help="Enable SwanLab logging")
+    
+    # Callback-related arguments
+    parser.add_argument("--callback_url", type=str, default="", 
+                       help="Callback URL for sending evaluation results")
+    parser.add_argument("--task_id", type=str, default="", 
+                       help="Task ID for callback")
+    parser.add_argument("--model_id", type=str, default="", 
+                       help="Model ID for callback")
+    parser.add_argument("--benchmark_id", type=str, default="", 
+                       help="Benchmark ID for callback")
     args = parser.parse_args()
     
     device_count = torch.cuda.device_count()
     print(f"Found {device_count} GPUs")
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     
-    model = AutoModelForCausalLM.from_pretrained(
-        args.model, 
-        torch_dtype=torch.bfloat16,
-        device_map="auto"
-    )
-    model.eval()
+    # Initialize callback parameters
+    callback_enabled = bool(args.callback_url)
+    if callback_enabled:
+        print(f"Callback enabled: {args.callback_url}")
+        # Use experiment_name as signature if not provided explicitly
+        signature = args.experiment_name
+        
+        # Generate default IDs if not provided
+        task_id = args.task_id or f"eval_task_{int(time.time())}"
+        model_id = args.model_id or os.path.basename(args.model)
+        benchmark_id = args.benchmark_id or os.path.basename(args.dataset)
+        
+        print(f"Callback parameters - Task ID: {task_id}, Model ID: {model_id}, Benchmark ID: {benchmark_id}")
     
-    tokenizer = AutoTokenizer.from_pretrained(args.tokenizer)
-
-    if args.file:
-        files = [args.file]
-    else:
-        files = glob.glob(f"{args.dataset}/*.json")
-
-    results = []
-    total_loss_overall = 0
-    total_token_overall = 0
-    
-    for file in files:
-        print(f"\nProcessing file: {file}")
-        dataset = json.load(open(file))
-        test_dataset = EvalDataset(
-            dataset, 
-            tokenizer, 
-            max_length=args.max_length,
-            cache_dir=args.cache_dir,
-            use_cache=not args.no_cache
+    try:
+        # Initialize SwanLab if enabled
+        if args.use_swanlab:
+            swanlab.init(
+                project="model-evaluation",
+                experiment_name=args.experiment_name,
+                config={
+                    "model_path": args.model,
+                    "tokenizer_path": args.tokenizer,
+                    "max_length": args.max_length,
+                    "batch_size": args.batch_size,
+                    "dataset_path": args.dataset,
+                    "device_count": device_count,
+                },
+                mode="local"
+            )
+        
+        model = AutoModelForCausalLM.from_pretrained(
+            args.model, 
+            torch_dtype=torch.bfloat16,
+            device_map="auto"
         )
+        model.eval()
         
-        test_dataset.preprocess_data(file_path=file)
+        tokenizer = AutoTokenizer.from_pretrained(args.tokenizer)
+
+        if args.file:
+            files = [args.file]
+        else:
+            files = glob.glob(f"{args.dataset}/*.json")
+
+        results = []
+        total_loss_overall = 0
+        total_token_overall = 0
         
-        dataloader = DataLoader(test_dataset, batch_size=args.batch_size)
+        for file in files:
+            print(f"\nProcessing file: {file}")
+            dataset = json.load(open(file))
+            test_dataset = EvalDataset(
+                dataset, 
+                tokenizer, 
+                max_length=args.max_length,
+                cache_dir=args.cache_dir,
+                use_cache=not args.no_cache
+            )
+            
+            test_dataset.preprocess_data(file_path=file)
+            
+            dataloader = DataLoader(test_dataset, batch_size=args.batch_size)
 
-        total_loss = 0
-        total_tokens = 0
+            total_loss = 0
+            total_tokens = 0
+            batch_losses = []
 
-        with torch.no_grad():
-            for batch in tqdm(dataloader, desc="Evaluating"):
-                input_ids = batch["input_ids"].to(device)
-                attention_mask = batch["attention_mask"].to(device)
-                labels = batch["labels"].to(device)
-                outputs = model(input_ids=input_ids, attention_mask=attention_mask, labels=labels)
-                loss = outputs.loss
-                active_tokens = (labels != -100).sum().item()
-                total_loss += loss.item() * active_tokens
-                total_tokens += active_tokens
+            with torch.no_grad():
+                for batch_idx, batch in enumerate(tqdm(dataloader, desc="Evaluating")):
+                    input_ids = batch["input_ids"].to(device)
+                    attention_mask = batch["attention_mask"].to(device)
+                    labels = batch["labels"].to(device)
+                    outputs = model(input_ids=input_ids, attention_mask=attention_mask, labels=labels)
+                    loss = outputs.loss
+                    active_tokens = (labels != -100).sum().item()
+                    
+                    batch_loss = loss.item()
+                    batch_losses.append(batch_loss)
+                    
+                    total_loss += batch_loss * active_tokens
+                    total_tokens += active_tokens
+                    
+                    # Log batch-level metrics to SwanLab
+                    if args.use_swanlab:
+                        problem_type = os.path.basename(file).replace(".json", "")
+                        swanlab.log({
+                            f"{problem_type}/batch_ce_loss": batch_loss,
+                            f"{problem_type}/batch_tokens": active_tokens,
+                            f"{problem_type}/batch_idx": batch_idx
+                        })
 
-        avg_ce_loss = total_loss / total_tokens
-        problem_type = os.path.basename(file).replace(".json", "")
-        results.append(
+            avg_ce_loss = total_loss / total_tokens
+            problem_type = os.path.basename(file).replace(".json", "")
+            
+            # Log file-level metrics
+            print(f"Problem type: {problem_type}, CE Loss: {avg_ce_loss:.4f}, Total tokens: {total_tokens}")
+            if args.use_swanlab:
+                swanlab.log({
+                    f"{problem_type}/avg_ce_loss": avg_ce_loss,
+                    f"{problem_type}/total_tokens": total_tokens,
+                    f"{problem_type}/total_samples": len(dataset)
+                })
+            
+            results.append(
+                {
+                    "problem": problem_type,
+                    "CE Loss": avg_ce_loss,
+                    "class": test_dataset.classification
+                }
+            )
+            total_loss_overall += total_loss
+            total_token_overall += total_tokens
+
+        overall_loss = total_loss_overall / total_token_overall
+
+        domain = 'all'
+        model_name = os.path.basename(args.model)
+        output_dir = os.path.join(args.output, model_name, domain)
+        os.makedirs(output_dir, exist_ok=True)
+        output_file = os.path.join(output_dir, "results.csv")
+        
+        df = pd.DataFrame(results)
+        new_row = pd.DataFrame([
             {
-                "problem": problem_type,
-                "CE Loss": avg_ce_loss,
-                "class": test_dataset.classification
-            }
-        )
-        total_loss_overall += total_loss
-        total_token_overall += total_tokens
-
-    overall_loss = total_loss_overall / total_token_overall
-
-    domain = 'all'
-    model_name = os.path.basename(args.model)
-    output_dir = os.path.join(args.output, model_name, domain)
-    os.makedirs(output_dir, exist_ok=True)
-    output_file = os.path.join(output_dir, "results.csv")
-    
-    df = pd.DataFrame(results)
-    new_row = pd.DataFrame([
-        {
-            "problem": "Avg.",
-            "CE Loss": df["CE Loss"].mean(),
-            "class": "average"
-        },
-        {
-            "problem": "Overall",
-            "CE Loss": overall_loss,
-            "class": "overall"
-        },
-    ])
-    df = pd.concat([df, new_row], ignore_index=True)
-    print(df)
-    df.to_csv(output_file, index=False)
+                "problem": "Avg.",
+                "CE Loss": df["CE Loss"].mean(),
+                "class": "average"
+            },
+            {
+                "problem": "Overall",
+                "CE Loss": overall_loss,
+                "class": "overall"
+            },
+        ])
+        df = pd.concat([df, new_row], ignore_index=True)
+        print(df)
+        df.to_csv(output_file, index=False)
+        
+        # Log final overall metrics to SwanLab
+        if args.use_swanlab:
+            avg_ce_loss = df["CE Loss"].mean()
+            swanlab.log({
+                "overall/average_ce_loss": avg_ce_loss,
+                "overall/overall_ce_loss": overall_loss,
+                "overall/total_tokens": total_token_overall,
+                "overall/num_problems": len(results) - 2,  # Exclude Avg. and Overall rows
+            })
+            
+            # Log per-problem results as a summary table
+            problem_results = {}
+            for _, row in df.iterrows():
+                if row["problem"] not in ["Avg.", "Overall"]:
+                    problem_results[f"ce_loss/{row['problem']}"] = row["CE Loss"]
+            
+            swanlab.log(problem_results)
+            
+            print(f"SwanLab experiment '{args.experiment_name}' completed successfully!")
+            swanlab.finish()
+        
+        # Send callback if enabled
+        if callback_enabled:
+            try:
+                # Prepare evaluator scores from individual problem results
+                evaluator_scores = {}
+                for _, row in df.iterrows():
+                    if row["problem"] not in ["Avg.", "Overall"]:
+                        evaluator_scores[row["problem"]] = float(row["CE Loss"])
+                
+                # Send success callback
+                send_callback(
+                    callback_url=args.callback_url,
+                    task_id=task_id,
+                    model_id=model_id,
+                    benchmark_id=benchmark_id,
+                    status="success",
+                    score=float(overall_loss),  # Use overall loss as main score
+                    evaluator_scores=evaluator_scores,
+                    signature=signature
+                )
+            except Exception as callback_error:
+                print(f"Error sending success callback: {callback_error}")
+                
+    except Exception as e:
+        print(f"Evaluation failed with error: {e}")
+        
+        # Send failure callback if enabled
+        if callback_enabled:
+            try:
+                send_callback(
+                    callback_url=args.callback_url,
+                    task_id=task_id,
+                    model_id=model_id,
+                    benchmark_id=benchmark_id,
+                    status="failed",
+                    score=0.0,
+                    error_message=str(e),
+                    signature=signature
+                )
+            except Exception as callback_error:
+                print(f"Error sending failure callback: {callback_error}")
+        
+        # Re-raise the original exception
+        raise e

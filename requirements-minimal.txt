@@ -1,0 +1,20 @@
+# 最小依赖包 - 仅用于基础模型评估
+# 安装方式: pip install -r requirements-minimal.txt
+# 适用于: auto_eval.sh 和 auto_eval.py 基础评估功能
+
+# 深度学习框架
+torch>=2.0.0
+
+# HuggingFace生态系统
+transformers>=4.30.0
+datasets>=2.12.0
+
+# 数据处理
+pandas>=2.0.0
+
+# 工具库
+tqdm>=4.65.0
+requests>=2.31.0
+
+# 实验跟踪
+swanlab>=0.3.0
