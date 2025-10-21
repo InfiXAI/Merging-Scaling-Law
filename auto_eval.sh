@@ -35,7 +35,6 @@ MAX_LENGTH=2048
 REPO_URL="https://github.com/maxuan1798/Merging-EVAL.git"
 WORK_DIR="./eval_workspace"
 REPO_DIR="$WORK_DIR/Merging-EVAL"
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Conda环境设置
 if [ -n "$CONDA_ENV_NAME" ]; then
@@ -82,28 +81,30 @@ fi
 # 创建工作目录
 mkdir -p "$WORK_DIR"
 
-# 克隆或更新代码仓库（仅用于获取数据集）
+# 克隆或更新代码仓库
 if [ -d "$REPO_DIR" ]; then
+    echo "Updating repository..."
     cd "$REPO_DIR"
     git pull -q origin main 2>/dev/null || (cd .. && rm -rf Merging-EVAL && git clone -q "$REPO_URL")
     cd - > /dev/null
 else
+    echo "Cloning repository..."
     cd "$WORK_DIR"
     git clone -q "$REPO_URL"
     cd - > /dev/null
 fi
 
 # 安装依赖（使用 requirements-minimal.txt）
-if [ -f "$SCRIPT_DIR/requirements-minimal.txt" ]; then
+if [ -f "$REPO_DIR/requirements-minimal.txt" ]; then
     echo "Installing dependencies from requirements-minimal.txt..."
-    $PYTHON_CMD -m pip install -q -r "$SCRIPT_DIR/requirements-minimal.txt" 2>/dev/null || true
+    $PYTHON_CMD -m pip install -q -r "$REPO_DIR/requirements-minimal.txt" 2>/dev/null || true
 else
     echo "Warning: requirements-minimal.txt not found, installing packages individually..."
     $PYTHON_CMD -m pip install -q torch transformers datasets pandas tqdm requests swanlab 2>/dev/null || true
 fi
 
-# 准备路径 - 使用本地脚本和远程数据
-EVAL_SCRIPT="$SCRIPT_DIR/scripts/eval.py"
+# 准备路径
+EVAL_SCRIPT="$REPO_DIR/scripts/eval.py"
 DATA_DIR="$REPO_DIR/data/eval_partial"
 OUTPUT_DIR="$REPO_DIR/output/$TASK_ID"
 CACHE_DIR="$REPO_DIR/cache/$TASK_ID"
