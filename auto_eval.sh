@@ -24,6 +24,7 @@ CALLBACK_URL="http://147.8.92.70:22222/api/evaluate/callback"
 TASK_ID="eval_task_$(date +%s)"
 MODEL_ID="my_model_v1"
 BENCHMARK_ID="math_problems"
+API_KEY=""  # 留空使用默认值，或设置为您的API Key
 
 # 评估参数
 BATCH_SIZE=8
@@ -128,7 +129,7 @@ else
 fi
 
 # 安装依赖（使用 requirements-minimal.txt）
-PIP_INSTALL_CMD="$PYTHON_CMD -m pip install -q"
+PIP_INSTALL_CMD="$PYTHON_CMD -m pip install "
 if [ -n "$PIP_INDEX_URL" ]; then
     echo "Using pip mirror: $PIP_INDEX_URL"
     PIP_INSTALL_CMD="$PIP_INSTALL_CMD -i $PIP_INDEX_URL"
@@ -157,6 +158,12 @@ echo "Model: $MODEL_URL"
 echo "Dataset: $DATASET"
 echo "Task ID: $TASK_ID"
 
+# 构建API Key参数
+API_KEY_ARG=""
+if [ -n "$API_KEY" ]; then
+    API_KEY_ARG="--api_key $API_KEY"
+fi
+
 # 执行评估
 if [ "$DATASET" = "all" ]; then
     echo "Evaluating all datasets..."
@@ -172,6 +179,7 @@ if [ "$DATASET" = "all" ]; then
         --task_id "$TASK_ID" \
         --model_id "$MODEL_ID" \
         --benchmark_id "$BENCHMARK_ID" \
+        $API_KEY_ARG \
         --max_length $MAX_LENGTH \
         --batch_size $BATCH_SIZE \
         --use_swanlab # 2>&1 | grep -E "(Evaluation|Callback|Error|✅|❌|Final)"
@@ -189,6 +197,7 @@ else
         --task_id "$TASK_ID" \
         --model_id "$MODEL_ID" \
         --benchmark_id "$BENCHMARK_ID" \
+        $API_KEY_ARG \
         --max_length $MAX_LENGTH \
         --batch_size $BATCH_SIZE \
         --use_swanlab # 2>&1 | grep -E "(Evaluation|Callback|Error|✅|❌|Final)"

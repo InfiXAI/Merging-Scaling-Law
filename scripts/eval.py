@@ -14,12 +14,13 @@ import swanlab
 import requests
 import time
 
-def send_callback(callback_url: str, task_id: str, model_id: str, benchmark_id: str, 
-                  status: str, score: float, evaluator_scores: dict = None, 
-                  error_message: str = None, signature: str = None, max_retries: int = 3):
+def send_callback(callback_url: str, task_id: str, model_id: str, benchmark_id: str,
+                  status: str, score: float, evaluator_scores: dict = None,
+                  error_message: str = None, signature: str = None, api_key: str = None,
+                  max_retries: int = 3):
     """
     Send evaluation callback to specified URL
-    
+
     Args:
         callback_url: The callback API endpoint URL
         task_id: Unique task identifier
@@ -30,6 +31,7 @@ def send_callback(callback_url: str, task_id: str, model_id: str, benchmark_id: 
         evaluator_scores: Dictionary of individual evaluator scores
         error_message: Error message if status is "failed"
         signature: Signature parameter (usually experiment_name)
+        api_key: API key for authentication
         max_retries: Maximum number of retry attempts
     """
     if evaluator_scores is None:
@@ -50,7 +52,7 @@ def send_callback(callback_url: str, task_id: str, model_id: str, benchmark_id: 
     headers = {
         'accept': 'application/json',
         'Content-Type': 'application/json',
-        'X-API-Key': 'callback-api-key-12345'  # API key header, TODO: replace with actual key by user/subtasks
+        'X-API-Key': api_key or ''  # Use provided API key or default
     }
     
     # Add signature parameter to URL if provided
@@ -297,14 +299,16 @@ if __name__ == "__main__":
                        help="Enable SwanLab logging")
     
     # Callback-related arguments
-    parser.add_argument("--callback_url", type=str, default="", 
+    parser.add_argument("--callback_url", type=str, default="",
                        help="Callback URL for sending evaluation results")
-    parser.add_argument("--task_id", type=str, default="", 
+    parser.add_argument("--task_id", type=str, default="",
                        help="Task ID for callback")
-    parser.add_argument("--model_id", type=str, default="", 
+    parser.add_argument("--model_id", type=str, default="",
                        help="Model ID for callback")
-    parser.add_argument("--benchmark_id", type=str, default="", 
+    parser.add_argument("--benchmark_id", type=str, default="",
                        help="Benchmark ID for callback")
+    parser.add_argument("--api_key", type=str, default="",
+                       help="API key for callback authentication")
     args = parser.parse_args()
     
     device_count = torch.cuda.device_count()
@@ -521,7 +525,8 @@ if __name__ == "__main__":
                     status="success",
                     score=float(overall_loss),  # Use overall loss as main score
                     evaluator_scores=evaluator_scores,
-                    signature=signature
+                    signature=signature,
+                    api_key=args.api_key
                 )
             except Exception as callback_error:
                 print(f"Error sending success callback: {callback_error}")
@@ -540,7 +545,8 @@ if __name__ == "__main__":
                     status="failed",
                     score=0.0,
                     error_message=str(e),
-                    signature=signature
+                    signature=signature,
+                    api_key=args.api_key
                 )
             except Exception as callback_error:
                 print(f"Error sending failure callback: {callback_error}")
