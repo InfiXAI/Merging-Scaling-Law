@@ -64,7 +64,7 @@ def send_callback(callback_url: str, task_id: str, model_id: str, benchmark_id: 
         try:
             print(f"Sending callback to {url} (attempt {attempt + 1}/{max_retries})")
             response = requests.post(url, headers=headers, json=payload, timeout=30)
-            
+            print(f"Payload: {payload}")
             if response.status_code == 200:
                 print("Callback sent successfully!")
                 return True
