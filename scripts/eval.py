@@ -49,7 +49,8 @@ def send_callback(callback_url: str, task_id: str, model_id: str, benchmark_id: 
     # Prepare headers
     headers = {
         'accept': 'application/json',
-        'Content-Type': 'application/json'
+        'Content-Type': 'application/json',
+        'X-API-Key': 'callback-api-key-12345'  # API key header, TODO: replace with actual key by user/subtasks
     }
     
     # Add signature parameter to URL if provided
