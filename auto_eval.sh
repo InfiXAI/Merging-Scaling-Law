@@ -29,6 +29,9 @@ BENCHMARK_ID="math_problems"
 BATCH_SIZE=8
 MAX_LENGTH=2048
 
+# PIP镜像源配置 (可选，用于加速下载)
+PIP_INDEX_URL="https://pypi.tuna.tsinghua.edu.cn/simple"  # 留空则使用默认源
+
 # ========================================
 # 自动执行部分 - 无需修改
 # ========================================
@@ -125,12 +128,18 @@ else
 fi
 
 # 安装依赖（使用 requirements-minimal.txt）
+PIP_INSTALL_CMD="$PYTHON_CMD -m pip install -q"
+if [ -n "$PIP_INDEX_URL" ]; then
+    echo "Using pip mirror: $PIP_INDEX_URL"
+    PIP_INSTALL_CMD="$PIP_INSTALL_CMD -i $PIP_INDEX_URL"
+fi
+
 if [ -f "$REPO_DIR/requirements-minimal.txt" ]; then
     echo "Installing dependencies from requirements-minimal.txt..."
-    $PYTHON_CMD -m pip install -q -r "$REPO_DIR/requirements-minimal.txt" 2>/dev/null || true
+    $PIP_INSTALL_CMD -r "$REPO_DIR/requirements-minimal.txt" 2>/dev/null || true
 else
     echo "Warning: requirements-minimal.txt not found, installing packages individually..."
-    $PYTHON_CMD -m pip install -q torch transformers datasets pandas tqdm requests swanlab 2>/dev/null || true
+    $PIP_INSTALL_CMD torch transformers datasets pandas tqdm requests swanlab 2>/dev/null || true
 fi
 
 # 准备路径
