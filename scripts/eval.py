@@ -13,6 +13,46 @@ import json
 import swanlab
 import requests
 import time
+from urllib.parse import urlparse
+
+def extract_model_name(model_path: str) -> str:
+    """
+    Extract model name from HuggingFace URL or local path
+
+    Args:
+        model_path: Model path (can be HuggingFace URL, repo name, or local path)
+
+    Returns:
+        Extracted model name
+
+    Examples:
+        "https://huggingface.co/microsoft/DialoGPT-medium" -> "microsoft/DialoGPT-medium"
+        "microsoft/DialoGPT-medium" -> "microsoft/DialoGPT-medium"
+        "/path/to/local/model" -> "model"
+    """
+    # Remove trailing slashes
+    model_path = model_path.rstrip('/')
+
+    # Check if it's a URL
+    if model_path.startswith('http://') or model_path.startswith('https://'):
+        parsed = urlparse(model_path)
+        # Extract path after domain, remove leading slash
+        path_parts = parsed.path.lstrip('/').split('/')
+        # For huggingface.co URLs, typically format is: /org/model or /org/model/tree/branch
+        if len(path_parts) >= 2:
+            # Return org/model format
+            return f"{path_parts[0]}/{path_parts[1]}"
+        else:
+            # Fallback to last part
+            return path_parts[-1] if path_parts else model_path
+
+    # Check if it's already in org/model format (HuggingFace style)
+    if '/' in model_path and not model_path.startswith('/'):
+        # Likely already in format like "microsoft/DialoGPT-medium"
+        return model_path
+
+    # Otherwise treat as local path and return basename
+    return os.path.basename(model_path)
 
 def send_callback(callback_url: str, task_id: str, model_id: str, benchmark_id: str,
                   status: str, score: float, evaluator_scores: dict = None,
@@ -331,7 +371,7 @@ if __name__ == "__main__":
         
         # Generate default IDs if not provided
         task_id = args.task_id or f"eval_task_{int(time.time())}"
-        model_id = args.model_id or os.path.basename(args.model)
+        model_id = args.model_id or extract_model_name(args.model)
         benchmark_id = args.benchmark_id or os.path.basename(args.dataset)
         
         print(f"Callback parameters - Task ID: {task_id}, Model ID: {model_id}, Benchmark ID: {benchmark_id}")

@@ -22,7 +22,7 @@ DATASET="algebra"
 # Callback配置
 CALLBACK_URL="http://147.8.92.70:22222/api/evaluate/callback"
 TASK_ID="eval_task_$(date +%s)"
-MODEL_ID="my_model_v1"
+MODEL_ID=""  # 留空则自动从MODEL_URL提取，或手动指定模型ID
 BENCHMARK_ID="math_problems"
 API_KEY=""  # 留空使用默认值，或设置为您的API Key
 
@@ -158,10 +158,15 @@ echo "Model: $MODEL_URL"
 echo "Dataset: $DATASET"
 echo "Task ID: $TASK_ID"
 
-# 构建API Key参数
+# 构建可选参数
 API_KEY_ARG=""
 if [ -n "$API_KEY" ]; then
     API_KEY_ARG="--api_key $API_KEY"
+fi
+
+MODEL_ID_ARG=""
+if [ -n "$MODEL_ID" ]; then
+    MODEL_ID_ARG="--model_id $MODEL_ID"
 fi
 
 # 执行评估
@@ -177,7 +182,7 @@ if [ "$DATASET" = "all" ]; then
         --experiment_name "$TASK_ID" \
         --callback_url "$CALLBACK_URL" \
         --task_id "$TASK_ID" \
-        --model_id "$MODEL_ID" \
+        $MODEL_ID_ARG \
         --benchmark_id "$BENCHMARK_ID" \
         $API_KEY_ARG \
         --max_length $MAX_LENGTH \
@@ -195,7 +200,7 @@ else
         --experiment_name "$TASK_ID" \
         --callback_url "$CALLBACK_URL" \
         --task_id "$TASK_ID" \
-        --model_id "$MODEL_ID" \
+        $MODEL_ID_ARG \
         --benchmark_id "$BENCHMARK_ID" \
         $API_KEY_ARG \
         --max_length $MAX_LENGTH \
