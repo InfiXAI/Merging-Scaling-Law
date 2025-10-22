@@ -152,7 +152,22 @@ fi
 # 安装swanlab（可能从自定义源）
 if [ -n "$SWANLAB_INDEX_URL" ]; then
     echo "Installing swanlab from custom index: $SWANLAB_INDEX_URL"
-    $PYTHON_CMD -m pip install --index-url "$SWANLAB_INDEX_URL" swanlab 2>/dev/null || true
+
+    # Extract host from URL for trusted-host flag
+    SWANLAB_HOST=$(echo "$SWANLAB_INDEX_URL" | sed -E 's|^https?://([^/:]+).*|\1|')
+
+    # Try to install swanlab from custom index with fallback to PyPI
+    # Use --trusted-host for HTTP sources and --extra-index-url to allow fallback
+    if [[ "$SWANLAB_INDEX_URL" == http://* ]]; then
+        echo "Using HTTP source, adding trusted-host: $SWANLAB_HOST"
+        $PYTHON_CMD -m pip install --trusted-host "$SWANLAB_HOST" \
+            --extra-index-url "$SWANLAB_INDEX_URL" swanlab==0.8.0 || \
+        $PYTHON_CMD -m pip install swanlab
+    else
+        # HTTPS source
+        $PYTHON_CMD -m pip install --extra-index-url "$SWANLAB_INDEX_URL" swanlab==0.8.0 || \
+        $PYTHON_CMD -m pip install swanlab
+    fi
 else
     echo "Installing swanlab from standard source..."
     $PIP_INSTALL_CMD swanlab 2>/dev/null || true
