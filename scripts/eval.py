@@ -338,7 +338,7 @@ if __name__ == "__main__":
     parser.add_argument("--use_swanlab", action="store_true",
                        help="Enable SwanLab logging")
     parser.add_argument("--swanlab_mode", type=str, default="local",
-                       choices=["local", "cloud", "disabled"],
+                       choices=["local", "cloud", "host", "disabled"],
                        help="SwanLab mode: 'local' for local logging, 'cloud' for cloud logging, 'disabled' to disable")
 
     # Callback-related arguments

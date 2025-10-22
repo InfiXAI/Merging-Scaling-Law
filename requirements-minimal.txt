@@ -18,5 +18,5 @@ tqdm>=4.65.0
 requests>=2.31.0
 
 # 实验跟踪
-swanlab>=0.3.0
-swanlab[dashboard]
+# swanlab>=0.3.0
+# swanlab[dashboard]
