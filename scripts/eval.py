@@ -333,11 +333,14 @@ if __name__ == "__main__":
     parser.add_argument("--output", type=str, default="./output")
     parser.add_argument("--cache_dir", type=str, default="./cache")
     parser.add_argument("--no_cache", action="store_true")
-    parser.add_argument("--experiment_name", type=str, default="eval_experiment", 
+    parser.add_argument("--experiment_name", type=str, default="eval_experiment",
                        help="Name of the experiment for logging")
-    parser.add_argument("--use_swanlab", action="store_true", 
+    parser.add_argument("--use_swanlab", action="store_true",
                        help="Enable SwanLab logging")
-    
+    parser.add_argument("--swanlab_mode", type=str, default="local",
+                       choices=["local", "cloud", "disabled"],
+                       help="SwanLab mode: 'local' for local logging, 'cloud' for cloud logging, 'disabled' to disable")
+
     # Callback-related arguments
     parser.add_argument("--callback_url", type=str, default="",
                        help="Callback URL for sending evaluation results")
@@ -385,7 +388,8 @@ if __name__ == "__main__":
         print(f"Loading tokenizer from: {tokenizer_path}")
 
         # Initialize SwanLab if enabled
-        if args.use_swanlab:
+        if args.use_swanlab and args.swanlab_mode != "disabled":
+            print(f"Initializing SwanLab in '{args.swanlab_mode}' mode...")
             swanlab.init(
                 project="model-evaluation",
                 experiment_name=args.experiment_name,
@@ -397,7 +401,7 @@ if __name__ == "__main__":
                     "dataset_path": args.dataset,
                     "device_count": device_count,
                 },
-                mode="local"
+                mode=args.swanlab_mode
             )
 
         # Load model with appropriate device map

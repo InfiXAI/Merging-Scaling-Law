@@ -30,8 +30,14 @@ API_KEY=""  # 留空使用默认值，或设置为您的API Key
 BATCH_SIZE=8
 MAX_LENGTH=2048
 
+# SwanLab模式配置 (可选: local, cloud, disabled)
+SWANLAB_MODE="local"  # local=本地存储, cloud=云端存储, disabled=禁用SwanLab
+
 # PIP镜像源配置 (可选，用于加速下载)
 PIP_INDEX_URL="https://pypi.tuna.tsinghua.edu.cn/simple"  # 留空则使用默认源
+
+# SwanLab自定义源配置 (可选，用于从私有源安装swanlab)
+SWANLAB_INDEX_URL="http://147.8.92.70:22281/simple/"  # 留空则使用PIP_INDEX_URL或默认源
 
 # ========================================
 # 自动执行部分 - 无需修改
@@ -140,7 +146,16 @@ if [ -f "$REPO_DIR/requirements-minimal.txt" ]; then
     $PIP_INSTALL_CMD -r "$REPO_DIR/requirements-minimal.txt" 2>/dev/null || true
 else
     echo "Warning: requirements-minimal.txt not found, installing packages individually..."
-    $PIP_INSTALL_CMD torch transformers datasets pandas tqdm requests swanlab 2>/dev/null || true
+    $PIP_INSTALL_CMD torch transformers datasets pandas tqdm requests 2>/dev/null || true
+fi
+
+# 安装swanlab（可能从自定义源）
+if [ -n "$SWANLAB_INDEX_URL" ]; then
+    echo "Installing swanlab from custom index: $SWANLAB_INDEX_URL"
+    $PYTHON_CMD -m pip install --index-url "$SWANLAB_INDEX_URL" swanlab 2>/dev/null || true
+else
+    echo "Installing swanlab from standard source..."
+    $PIP_INSTALL_CMD swanlab 2>/dev/null || true
 fi
 
 # 准备路径
@@ -187,7 +202,8 @@ if [ "$DATASET" = "all" ]; then
         $API_KEY_ARG \
         --max_length $MAX_LENGTH \
         --batch_size $BATCH_SIZE \
-        --use_swanlab # 2>&1 | grep -E "(Evaluation|Callback|Error|✅|❌|Final)"
+        --use_swanlab \
+        --swanlab_mode "$SWANLAB_MODE" # 2>&1 | grep -E "(Evaluation|Callback|Error|✅|❌|Final)"
 else
     echo "Evaluating single dataset: $DATASET"
     # 评估单个数据集
@@ -205,7 +221,8 @@ else
         $API_KEY_ARG \
         --max_length $MAX_LENGTH \
         --batch_size $BATCH_SIZE \
-        --use_swanlab # 2>&1 | grep -E "(Evaluation|Callback|Error|✅|❌|Final)"
+        --use_swanlab \
+        --swanlab_mode "$SWANLAB_MODE" # 2>&1 | grep -E "(Evaluation|Callback|Error|✅|❌|Final)"
 fi
 
 if [ $? -eq 0 ]; then
