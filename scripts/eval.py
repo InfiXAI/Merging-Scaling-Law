@@ -377,14 +377,21 @@ if __name__ == "__main__":
         print(f"Callback parameters - Task ID: {task_id}, Model ID: {model_id}, Benchmark ID: {benchmark_id}")
     
     try:
+        # Normalize model and tokenizer paths (extract from HuggingFace URLs if needed)
+        model_path = extract_model_name(args.model)
+        tokenizer_path = extract_model_name(args.tokenizer)
+
+        print(f"Loading model from: {model_path}")
+        print(f"Loading tokenizer from: {tokenizer_path}")
+
         # Initialize SwanLab if enabled
         if args.use_swanlab:
             swanlab.init(
                 project="model-evaluation",
                 experiment_name=args.experiment_name,
                 config={
-                    "model_path": args.model,
-                    "tokenizer_path": args.tokenizer,
+                    "model_path": model_path,
+                    "tokenizer_path": tokenizer_path,
                     "max_length": args.max_length,
                     "batch_size": args.batch_size,
                     "dataset_path": args.dataset,
@@ -392,25 +399,25 @@ if __name__ == "__main__":
                 },
                 mode="local"
             )
-        
+
         # Load model with appropriate device map
         # Use device_map="auto" only with CUDA, otherwise load to CPU to avoid MPS issues
         if torch.cuda.is_available():
             model = AutoModelForCausalLM.from_pretrained(
-                args.model,
+                model_path,
                 torch_dtype=torch.bfloat16,
                 device_map="auto"
             )
         else:
             # On CPU or MPS, use float32 and explicit device placement
             model = AutoModelForCausalLM.from_pretrained(
-                args.model,
+                model_path,
                 torch_dtype=torch.float32
             )
             model = model.to(device)
         model.eval()
 
-        tokenizer = AutoTokenizer.from_pretrained(args.tokenizer)
+        tokenizer = AutoTokenizer.from_pretrained(tokenizer_path)
 
         # Set padding token if not set
         if tokenizer.pad_token is None:
@@ -504,7 +511,8 @@ if __name__ == "__main__":
         overall_loss = total_loss_overall / total_token_overall
 
         domain = 'all'
-        model_name = os.path.basename(args.model)
+        # Use normalized model path for output directory (replace / with _ for filesystem compatibility)
+        model_name = model_path.replace('/', '_')
         output_dir = os.path.join(args.output, model_name, domain)
         os.makedirs(output_dir, exist_ok=True)
         output_file = os.path.join(output_dir, "results.csv")
