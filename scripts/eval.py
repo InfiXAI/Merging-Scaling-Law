@@ -391,7 +391,7 @@ if __name__ == "__main__":
         if args.use_swanlab and args.swanlab_mode != "disabled":
             print(f"Initializing SwanLab in '{args.swanlab_mode}' mode...")
             swanlab.init(
-                project="model-evaluation",
+                project=f"task-{task_id}",
                 experiment_name=args.experiment_name,
                 config={
                     "model_path": model_path,
