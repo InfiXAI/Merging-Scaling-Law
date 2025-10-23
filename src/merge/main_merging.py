@@ -13,11 +13,35 @@ def main():
     print(f"Scaling coefficient is {args.scaling_coefficient}")
     device = "cuda" if args.use_gpu else "cpu"
     print(f"Merging conducted on {device}")
-    base_model = AutoModelForCausalLM.from_pretrained(args.base_model, torch_dtype=torch.bfloat16).to(device)
-    tokenizer = AutoTokenizer.from_pretrained(args.base_model)
+    
+    # 设置模型加载参数
+    model_kwargs = {
+        "torch_dtype": torch.bfloat16,
+    }
+    
+    if args.offline:
+        model_kwargs["local_files_only"] = True
+        model_kwargs["trust_remote_code"] = True
+        print("Running in offline mode - using local files only")
+    
+    # 加载基础模型
+    print("Loading base model...")
+    base_model = AutoModelForCausalLM.from_pretrained(args.base_model, **model_kwargs).to(device)
+    
+    # 加载tokenizer
+    tokenizer_kwargs = {}
+    if args.offline:
+        tokenizer_kwargs["local_files_only"] = True
+        tokenizer_kwargs["trust_remote_code"] = True
+    
+    print("Loading tokenizer...")
+    tokenizer = AutoTokenizer.from_pretrained(args.base_model, **tokenizer_kwargs)
+    
+    # 加载候选模型
     candidate_models = []
-    for model_to_merge in models_to_merge:
-        candidate_models.append(AutoModelForCausalLM.from_pretrained(model_to_merge, torch_dtype=torch.bfloat16).to(device))
+    for i, model_to_merge in enumerate(models_to_merge):
+        print(f"Loading candidate model {i+1}/{len(models_to_merge)}: {os.path.basename(model_to_merge)}")
+        candidate_models.append(AutoModelForCausalLM.from_pretrained(model_to_merge, **model_kwargs).to(device))
     merging_engine = MergingMethod(merging_method_name=args.merge_method)
     if args.weight_mask_rates is not None:
         weight_mask_rates = args.weight_mask_rates.split(",")
@@ -58,5 +82,7 @@ if __name__ == '__main__':
     arg_parser.add_argument("--use_gpu", action='store_true', default=False)
     arg_parser.add_argument("--mask_apply_method", type=str, default="average_merging")
     arg_parser.add_argument("--weight_mask_rates", type=str, default=None)
+    arg_parser.add_argument("--offline", action="store_true", 
+                           help="Run in offline mode using local files only")
     args = arg_parser.parse_args()
     main()

@@ -1,83 +1,66 @@
-from torch.utils.data import Dataset, DataLoader
-import torch
-from transformers import AutoModelForCausalLM, AutoTokenizer
+#!/usr/bin/env python3
+"""
+Enhanced evaluation script for language models with SwanLab logging support.
+Supports both single file and batch evaluation with comprehensive error handling.
+"""
+
 import argparse
-from datasets import load_dataset
-from tqdm import tqdm
-import pandas as pd
+import json
 import os
-import glob
 import pickle
 import hashlib
-import json
-import swanlab
-import requests
 import time
+from typing import List
 from urllib.parse import urlparse
+
+import pandas as pd
+import torch
+import requests
+from torch.utils.data import Dataset, DataLoader
+from transformers import AutoModelForCausalLM, AutoTokenizer, AutoConfig
+from tqdm import tqdm
+
+try:
+    import swanlab
+    SWANLAB_AVAILABLE = True
+except ImportError:
+    SWANLAB_AVAILABLE = False
+    print("Warning: SwanLab not available. Install with 'pip install swanlab' for logging support.")
+
 
 def extract_model_name(model_path: str) -> str:
     """
-    Extract model name from HuggingFace URL or local path
-
+    Extract model name from HuggingFace URL or local path.
+    
     Args:
         model_path: Model path (can be HuggingFace URL, repo name, or local path)
-
+    
     Returns:
         Extracted model name
-
-    Examples:
-        "https://huggingface.co/microsoft/DialoGPT-medium" -> "microsoft/DialoGPT-medium"
-        "microsoft/DialoGPT-medium" -> "microsoft/DialoGPT-medium"
-        "/path/to/local/model" -> "model"
     """
-    # Remove trailing slashes
     model_path = model_path.rstrip('/')
-
-    # Check if it's a URL
-    if model_path.startswith('http://') or model_path.startswith('https://'):
+    
+    if model_path.startswith(('http://', 'https://')):
         parsed = urlparse(model_path)
-        # Extract path after domain, remove leading slash
         path_parts = parsed.path.lstrip('/').split('/')
-        # For huggingface.co URLs, typically format is: /org/model or /org/model/tree/branch
         if len(path_parts) >= 2:
-            # Return org/model format
             return f"{path_parts[0]}/{path_parts[1]}"
-        else:
-            # Fallback to last part
-            return path_parts[-1] if path_parts else model_path
-
-    # Check if it's already in org/model format (HuggingFace style)
+        return path_parts[-1] if path_parts else model_path
+    
     if '/' in model_path and not model_path.startswith('/'):
-        # Likely already in format like "microsoft/DialoGPT-medium"
         return model_path
-
-    # Otherwise treat as local path and return basename
+    
     return os.path.basename(model_path)
+
 
 def send_callback(callback_url: str, task_id: str, model_id: str, benchmark_id: str,
                   status: str, score: float, evaluator_scores: dict = None,
                   error_message: str = None, signature: str = None, api_key: str = None,
                   max_retries: int = 3):
-    """
-    Send evaluation callback to specified URL
-
-    Args:
-        callback_url: The callback API endpoint URL
-        task_id: Unique task identifier
-        model_id: Model identifier
-        benchmark_id: Benchmark identifier
-        status: Evaluation status ("succeed" or "failed")
-        score: Overall evaluation score
-        evaluator_scores: Dictionary of individual evaluator scores
-        error_message: Error message if status is "failed"
-        signature: Signature parameter (usually experiment_name)
-        api_key: API key for authentication
-        max_retries: Maximum number of retry attempts
-    """
+    """Send evaluation callback to specified URL."""
     if evaluator_scores is None:
         evaluator_scores = {}
     
-    # Prepare the payload
     payload = {
         "task_id": task_id,
         "model_id": model_id,
@@ -88,37 +71,32 @@ def send_callback(callback_url: str, task_id: str, model_id: str, benchmark_id: 
         "error_message": error_message
     }
     
-    # Prepare headers
     headers = {
         'accept': 'application/json',
         'Content-Type': 'application/json',
-        'X-API-Key': api_key or ''  # Use provided API key or default
+        'X-API-Key': api_key or ''
     }
     
-    # Add signature parameter to URL if provided
     url = callback_url
     if signature:
         separator = '&' if '?' in url else '?'
         url = f"{url}{separator}signature={signature}"
     
-    # Attempt to send the callback with retries
     for attempt in range(max_retries):
         try:
             print(f"Sending callback to {url} (attempt {attempt + 1}/{max_retries})")
             response = requests.post(url, headers=headers, json=payload, timeout=30)
-            print(f"Payload: {payload}")
             if response.status_code == 200:
                 print("Callback sent successfully!")
                 return True
             else:
                 print(f"Callback failed with status code: {response.status_code}")
                 print(f"Response: {response.text}")
-                
         except requests.exceptions.RequestException as e:
             print(f"Error sending callback (attempt {attempt + 1}): {e}")
-            
+        
         if attempt < max_retries - 1:
-            print(f"Retrying in 5 seconds...")
+            print("Retrying in 5 seconds...")
             time.sleep(5)
     
     print(f"Failed to send callback after {max_retries} attempts")
@@ -126,6 +104,7 @@ def send_callback(callback_url: str, task_id: str, model_id: str, benchmark_id: 
 
 
 def build_prompt(problem: str, solution: str, tokenizer=None) -> str:
+    """Build prompt for the model."""
     if solution:
         messages = [
             {"role": "system", "content": "You are a helpful assistant."},
@@ -139,12 +118,78 @@ def build_prompt(problem: str, solution: str, tokenizer=None) -> str:
             {"role": "user", "content": problem.strip()},
         ]
         messages = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
-
+    
     return messages
 
 
+def parse_index_spec(index_spec: str, total: int) -> List[int]:
+    """Parse an index spec like '1-10,15,20-22' into 0-based indices."""
+    indices: List[int] = []
+    if not index_spec:
+        return indices
+
+    parts = [p.strip() for p in index_spec.split(",") if p.strip()]
+    for part in parts:
+        if "-" in part:
+            start_str, end_str = [s.strip() for s in part.split("-", 1)]
+            if not start_str.isdigit() or not end_str.isdigit():
+                raise ValueError(f"Invalid range: {part}")
+            start = max(1, int(start_str))
+            end = min(total, int(end_str))
+            if start <= end:
+                indices.extend(list(range(start - 1, end)))
+        else:
+            if not part.isdigit():
+                raise ValueError(f"Invalid index: {part}")
+            val = int(part)
+            if 1 <= val <= total:
+                indices.append(val - 1)
+    
+    # Remove duplicates while preserving order
+    seen = set()
+    deduped: List[int] = []
+    for i in indices:
+        if i not in seen:
+            seen.add(i)
+            deduped.append(i)
+    return deduped
+
+
+def fix_tokenizer_padding(tokenizer):
+    """Fix tokenizer padding token issues."""
+    if tokenizer.pad_token is None:
+        if tokenizer.eos_token is not None:
+            tokenizer.pad_token = tokenizer.eos_token
+            print(f"Set pad_token to eos_token: {tokenizer.eos_token}")
+        else:
+            tokenizer.add_special_tokens({'pad_token': '[PAD]'})
+            print("Added [PAD] as special token")
+    return tokenizer
+
+
+def fix_model_config(model_path):
+    """Fix model configuration issues, especially RoPE config."""
+    try:
+        config = AutoConfig.from_pretrained(model_path)
+        
+        if hasattr(config, 'rope_scaling') and config.rope_scaling is not None:
+            if hasattr(config.rope_scaling, 'original_max_position_embeddings'):
+                if config.rope_scaling.original_max_position_embeddings >= config.max_position_embeddings:
+                    print(f"Fixing RoPE config: original_max_position_embeddings={config.rope_scaling.original_max_position_embeddings} >= max_position_embeddings={config.max_position_embeddings}")
+                    config.rope_scaling.original_max_position_embeddings = min(
+                        config.rope_scaling.original_max_position_embeddings,
+                        config.max_position_embeddings - 1
+                    )
+                    print(f"Fixed RoPE config: original_max_position_embeddings={config.rope_scaling.original_max_position_embeddings}")
+        
+        return config
+    except Exception as e:
+        print(f"Warning: Could not fix model config: {e}")
+        return None
+
+
 def get_cache_key(file_path: str, tokenizer_name: str, max_length: int) -> str:
-    """生成缓存键，基于文件内容、tokenizer和参数"""
+    """Generate cache key for dataset."""
     with open(file_path, 'r', encoding='utf-8') as f:
         file_content = f.read()
     
@@ -159,6 +204,8 @@ def get_cache_key(file_path: str, tokenizer_name: str, max_length: int) -> str:
 
 
 class EvalDataset(Dataset):
+    """Dataset class for evaluation with caching support."""
+    
     def __init__(self, dataset, tokenizer, max_length=512, cache_dir="./dataset_cache", use_cache=True):
         self.dataset = dataset
         self.tokenizer = tokenizer
@@ -170,7 +217,8 @@ class EvalDataset(Dataset):
             os.makedirs(self.cache_dir, exist_ok=True)
 
         self.classification = None
-        self.set_classification(self.dataset[0])
+        if len(self.dataset) > 0:
+            self.set_classification(self.dataset[0])
         
         self.cached_data = None
 
@@ -182,7 +230,7 @@ class EvalDataset(Dataset):
             self.classification = row["classification"].lower()
         else:
             self.classification = "code"
-        print(f"loaded {self.classification} data!")
+        print(f"Loaded {self.classification} data!")
 
     def preprocess_data(self, file_path=None):
         if not self.use_cache:
@@ -321,43 +369,52 @@ class EvalDataset(Dataset):
         }
 
 
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--model", type=str, default="/path/to/pretrained-model")
-    parser.add_argument("--tokenizer", type=str, default="/path/to/tokenizer")
-    parser.add_argument("--max_length", type=int, default=2048)
-    parser.add_argument("--batch_size", type=int, default=10)
-    parser.add_argument("--dataset", type=str, default="./data")
-    parser.add_argument("--file", type=str, default="")
-    parser.add_argument("--split", type=str, default="train")
-    parser.add_argument("--output", type=str, default="./output")
-    parser.add_argument("--cache_dir", type=str, default="./cache")
-    parser.add_argument("--no_cache", action="store_true")
-    parser.add_argument("--experiment_name", type=str, default="eval_experiment",
-                       help="Name of the experiment for logging")
-    parser.add_argument("--use_swanlab", action="store_true",
-                       help="Enable SwanLab logging")
-    parser.add_argument("--swanlab_mode", type=str, default="local",
+def main():
+    """Main evaluation function."""
+    parser = argparse.ArgumentParser(description="Enhanced evaluation script with SwanLab support")
+    
+    # Core arguments
+    parser.add_argument("--model", type=str, required=True, help="Model path")
+    parser.add_argument("--tokenizer", type=str, required=True, help="Tokenizer path")
+    parser.add_argument("--dataset", type=str, default="./data", help="Dataset directory")
+    parser.add_argument("--file", type=str, default="", help="Single file to evaluate")
+    parser.add_argument("--output", type=str, default="./output", help="Output directory")
+    
+    # Evaluation parameters
+    parser.add_argument("--max_length", type=int, default=2048, help="Maximum sequence length")
+    parser.add_argument("--batch_size", type=int, default=10, help="Batch size")
+    parser.add_argument("--indices", type=str, default="", help="1-based indices or ranges")
+    parser.add_argument("--cache_dir", type=str, default="./cache", help="Cache directory")
+    parser.add_argument("--no_cache", action="store_true", help="Disable caching")
+    parser.add_argument("--offline", action="store_true", help="Run in offline mode")
+    parser.add_argument("--run_name", type=str, default="", help="Override output folder name")
+    
+    # SwanLab logging
+    parser.add_argument("--use_swanlab", action="store_true", help="Enable SwanLab logging")
+    parser.add_argument("--swanlab_mode", type=str, default="local", 
                        choices=["local", "cloud", "host", "disabled"],
-                       help="SwanLab mode: 'local' for local logging, 'cloud' for cloud logging, 'disabled' to disable")
-
-    # Callback-related arguments
-    parser.add_argument("--callback_url", type=str, default="",
-                       help="Callback URL for sending evaluation results")
-    parser.add_argument("--task_id", type=str, default="",
-                       help="Task ID for callback")
-    parser.add_argument("--model_id", type=str, default="",
-                       help="Model ID for callback")
-    parser.add_argument("--benchmark_id", type=str, default="",
-                       help="Benchmark ID for callback")
-    parser.add_argument("--api_key", type=str, default="",
-                       help="API key for callback authentication")
+                       help="SwanLab mode")
+    parser.add_argument("--experiment_name", type=str, default="eval_experiment",
+                       help="Experiment name for logging")
+    
+    # Callback support
+    parser.add_argument("--callback_url", type=str, default="", help="Callback URL")
+    parser.add_argument("--task_id", type=str, default="", help="Task ID for callback")
+    parser.add_argument("--model_id", type=str, default="", help="Model ID for callback")
+    parser.add_argument("--benchmark_id", type=str, default="", help="Benchmark ID for callback")
+    parser.add_argument("--api_key", type=str, default="", help="API key for callback")
+    
     args = parser.parse_args()
     
+    # Check SwanLab availability
+    if args.use_swanlab and not SWANLAB_AVAILABLE:
+        print("Warning: SwanLab requested but not available. Disabling logging.")
+        args.use_swanlab = False
+    
+    # Device setup
     device_count = torch.cuda.device_count()
     print(f"Found {device_count} GPUs")
-
-    # Device selection: prefer CUDA, fallback to CPU (avoid MPS due to compatibility issues)
+    
     if torch.cuda.is_available():
         device = torch.device("cuda")
         print("Using CUDA device")
@@ -369,23 +426,33 @@ if __name__ == "__main__":
     callback_enabled = bool(args.callback_url)
     if callback_enabled:
         print(f"Callback enabled: {args.callback_url}")
-        # Use experiment_name as signature if not provided explicitly
         signature = args.experiment_name
-        
-        # Generate default IDs if not provided
         task_id = args.task_id or f"eval_task_{int(time.time())}"
         model_id = args.model_id or extract_model_name(args.model)
         benchmark_id = args.benchmark_id or os.path.basename(args.dataset)
-        
         print(f"Callback parameters - Task ID: {task_id}, Model ID: {model_id}, Benchmark ID: {benchmark_id}")
     
     try:
-        # Normalize model and tokenizer paths (extract from HuggingFace URLs if needed)
-        model_path = extract_model_name(args.model)
-        tokenizer_path = extract_model_name(args.tokenizer)
-
+        # Load model - use original paths for local models
+        model_path = args.model
+        tokenizer_path = args.tokenizer
+        
         print(f"Loading model from: {model_path}")
         print(f"Loading tokenizer from: {tokenizer_path}")
+        
+        fixed_config = fix_model_config(args.model)
+        
+        model_kwargs = {
+            "torch_dtype": torch.bfloat16,
+            "device_map": "auto",
+        }
+        
+        if fixed_config is not None:
+            model_kwargs["config"] = fixed_config
+        
+        if args.offline:
+            model_kwargs["local_files_only"] = True
+            print("Running in offline mode")
 
         # Initialize SwanLab if enabled
         if args.use_swanlab and args.swanlab_mode != "disabled":
@@ -404,31 +471,38 @@ if __name__ == "__main__":
                 mode=args.swanlab_mode
             )
 
-        # Load model with appropriate device map
-        # Use device_map="auto" only with CUDA, otherwise load to CPU to avoid MPS issues
+        # Load model
         if torch.cuda.is_available():
-            model = AutoModelForCausalLM.from_pretrained(
-                model_path,
-                torch_dtype=torch.bfloat16,
-                device_map="auto"
-            )
+            try:
+                model = AutoModelForCausalLM.from_pretrained(model_path, **model_kwargs)
+            except Exception as e:
+                print(f"Error loading model: {e}")
+                if "Connection" in str(e) or "timeout" in str(e).lower():
+                    print("Network connection issue detected. Try running with --offline flag.")
+                raise
         else:
-            # On CPU or MPS, use float32 and explicit device placement
-            model = AutoModelForCausalLM.from_pretrained(
-                model_path,
-                torch_dtype=torch.float32
-            )
+            model_kwargs["torch_dtype"] = torch.float32
+            model_kwargs["device_map"] = None
+            model = AutoModelForCausalLM.from_pretrained(model_path, **model_kwargs)
             model = model.to(device)
         model.eval()
 
-        tokenizer = AutoTokenizer.from_pretrained(tokenizer_path)
+        # Load tokenizer
+        tokenizer_kwargs = {}
+        if args.offline:
+            tokenizer_kwargs["local_files_only"] = True
+        
+        try:
+            tokenizer = AutoTokenizer.from_pretrained(tokenizer_path, **tokenizer_kwargs)
+        except Exception as e:
+            print(f"Error loading tokenizer: {e}")
+            if "Connection" in str(e) or "timeout" in str(e).lower():
+                print("Network connection issue detected. Try running with --offline flag.")
+            raise
+        
+        tokenizer = fix_tokenizer_padding(tokenizer)
 
-        # Set padding token if not set
-        if tokenizer.pad_token is None:
-            tokenizer.pad_token = tokenizer.eos_token
-            print(f"Set pad_token to eos_token: {tokenizer.eos_token}")
-
-        # Adjust max_length based on model's max position embeddings
+        # Adjust max_length based on model's capabilities
         model_max_length = getattr(model.config, 'n_positions', None) or \
                           getattr(model.config, 'max_position_embeddings', None) or \
                           args.max_length
@@ -438,11 +512,36 @@ if __name__ == "__main__":
             print(f"Adjusting max_length to {model_max_length}")
             args.max_length = model_max_length
 
+        # Prepare files to evaluate
         if args.file:
             files = [args.file]
         else:
+            import glob
             files = glob.glob(f"{args.dataset}/*.json")
+        
+        # Handle indices slicing if specified
+        if args.indices and args.file:
+            print(f"Processing file with indices: {args.file}")
+            full_dataset = json.load(open(args.file))
+            total = len(full_dataset)
+            if total == 0:
+                raise ValueError("Empty dataset file")
+            
+            chosen = parse_index_spec(args.indices, total)
+            if not chosen:
+                raise ValueError(f"No valid indices selected from spec: {args.indices}")
+            dataset = [full_dataset[i] for i in chosen]
+            print(f"Using {len(dataset)} samples from indices spec '{args.indices}' out of total {total}")
+            
+            import tempfile
+            with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as tmp_file:
+                json.dump(dataset, tmp_file)
+                tmp_file_path = tmp_file.name
+            
+            files = [tmp_file_path]
+            print(f"Created temporary sliced dataset: {tmp_file_path}")
 
+        # Run evaluation
         results = []
         total_loss_overall = 0
         total_token_overall = 0
@@ -464,7 +563,6 @@ if __name__ == "__main__":
 
             total_loss = 0
             total_tokens = 0
-            batch_losses = []
 
             with torch.no_grad():
                 for batch_idx, batch in enumerate(tqdm(dataloader, desc="Evaluating")):
@@ -476,8 +574,6 @@ if __name__ == "__main__":
                     active_tokens = (labels != -100).sum().item()
                     
                     batch_loss = loss.item()
-                    batch_losses.append(batch_loss)
-                    
                     total_loss += batch_loss * active_tokens
                     total_tokens += active_tokens
                     
@@ -493,7 +589,6 @@ if __name__ == "__main__":
             avg_ce_loss = total_loss / total_tokens
             problem_type = os.path.basename(file).replace(".json", "")
             
-            # Log file-level metrics
             print(f"Problem type: {problem_type}, CE Loss: {avg_ce_loss:.4f}, Total tokens: {total_tokens}")
             if args.use_swanlab:
                 swanlab.log({
@@ -502,21 +597,29 @@ if __name__ == "__main__":
                     f"{problem_type}/total_samples": len(dataset)
                 })
             
-            results.append(
-                {
-                    "problem": problem_type,
-                    "CE Loss": avg_ce_loss,
-                    "class": test_dataset.classification
-                }
-            )
+            results.append({
+                "problem": problem_type,
+                "CE Loss": avg_ce_loss,
+                "class": test_dataset.classification
+            })
             total_loss_overall += total_loss
             total_token_overall += total_tokens
 
         overall_loss = total_loss_overall / total_token_overall
 
+        # Generate output
         domain = 'all'
-        # Use normalized model path for output directory (replace / with _ for filesystem compatibility)
-        model_name = model_path.replace('/', '_')
+        if args.run_name:
+            model_name = args.run_name
+        else:
+            norm_path = os.path.normpath(args.model)
+            parts = norm_path.split(os.sep)
+            if len(parts) >= 3:
+                model_name = "_".join(parts[-3:])
+            else:
+                model_name = os.path.basename(args.model)
+        
+        model_name = model_name.replace('/', '_')
         output_dir = os.path.join(args.output, model_name, domain)
         os.makedirs(output_dir, exist_ok=True)
         output_file = os.path.join(output_dir, "results.csv")
@@ -538,44 +641,40 @@ if __name__ == "__main__":
         print(df)
         df.to_csv(output_file, index=False)
         
-        # Log final overall metrics to SwanLab
+        # Log final metrics to SwanLab
         if args.use_swanlab:
             avg_ce_loss = df["CE Loss"].mean()
             swanlab.log({
                 "overall/average_ce_loss": avg_ce_loss,
                 "overall/overall_ce_loss": overall_loss,
                 "overall/total_tokens": total_token_overall,
-                "overall/num_problems": len(results) - 2,  # Exclude Avg. and Overall rows
+                "overall/num_problems": len(results) - 2,
             })
             
-            # Log per-problem results as a summary table
             problem_results = {}
             for _, row in df.iterrows():
                 if row["problem"] not in ["Avg.", "Overall"]:
                     problem_results[f"ce_loss/{row['problem']}"] = row["CE Loss"]
             
             swanlab.log(problem_results)
-            
             print(f"SwanLab experiment '{args.experiment_name}' completed successfully!")
             swanlab.finish()
         
         # Send callback if enabled
         if callback_enabled:
             try:
-                # Prepare evaluator scores from individual problem results
                 evaluator_scores = {}
                 for _, row in df.iterrows():
                     if row["problem"] not in ["Avg.", "Overall"]:
                         evaluator_scores[row["problem"]] = float(row["CE Loss"])
                 
-                # Send success callback
                 send_callback(
                     callback_url=args.callback_url,
                     task_id=task_id,
                     model_id=model_id,
                     benchmark_id=benchmark_id,
                     status="success",
-                    score=float(overall_loss),  # Use overall loss as main score
+                    score=float(overall_loss),
                     evaluator_scores=evaluator_scores,
                     signature=signature,
                     api_key=args.api_key
@@ -586,7 +685,6 @@ if __name__ == "__main__":
     except Exception as e:
         print(f"Evaluation failed with error: {e}")
         
-        # Send failure callback if enabled
         if callback_enabled:
             try:
                 send_callback(
@@ -603,5 +701,8 @@ if __name__ == "__main__":
             except Exception as callback_error:
                 print(f"Error sending failure callback: {callback_error}")
         
-        # Re-raise the original exception
         raise e
+
+
+if __name__ == "__main__":
+    main()
